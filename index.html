@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Marvin - Habit Tracker</title>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <!-- ===== STRUCTURE: what is on the page ===== -->
+  <div class="app">
+    <h1>Marvin</h1>
+    <p class="date" style="margin-bottom:2px">Your habit tracker for growth</p>
+    <p class="date" id="today-label"></p>
+
+    <div class="card">
+      <div class="progress-text">
+        <span>Today's progress</span>
+        <span id="progress-text">0 of 0 done</span>
+      </div>
+      <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="add-row">
+        <input type="text" id="habit-input" placeholder="New habit, e.g. Read 10 pages" maxlength="60" autocomplete="off">
+        <button type="button" id="add-btn" class="add">Add</button>
+      </div>
+      <p class="error" id="error"></p>
+    </div>
+
+    <div id="habit-list"></div>
+
+    <p class="note">Saved in this browser only.</p>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
