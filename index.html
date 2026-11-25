@@ -8,6 +8,7 @@
   <style>
     /* ===== STYLE: how everything looks ===== */
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     body {
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       background: #f3f4f6;
@@ -27,14 +28,29 @@
       box-shadow: 0 1px 3px rgba(0,0,0,.08);
     }
 
+    /* Login box */
+    .card h2 { margin: 0 0 12px; font-size: 20px; }
+    .field { display: block; width: 100%; margin-bottom: 10px; }
+    .auth-buttons { display: flex; gap: 8px; }
+    .auth-buttons button { flex: 1; }
+    button.secondary {
+      padding: 10px 14px; font-size: 16px; font-weight: 600;
+      background: #fff; color: #1f2937; border: 1px solid #d1d5db;
+      border-radius: 8px; cursor: pointer;
+    }
+    button.secondary:hover { background: #f9fafb; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 16px; }
+    .who { font-size: 13px; color: #6b7280; word-break: break-all; }
+
     /* Today's progress */
     .progress-text { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 8px; }
     .bar { height: 10px; background: #e5e7eb; border-radius: 99px; overflow: hidden; }
     .bar-fill { height: 100%; width: 0%; background: #16a34a; transition: width .3s; }
 
-    /* Add form */
+    /* Add row */
     .add-row { display: flex; gap: 8px; }
-    input[type="text"] {
+    input[type="text"], input[type="email"], input[type="password"] {
       flex: 1; padding: 10px 12px; font-size: 16px;
       border: 1px solid #d1d5db; border-radius: 8px;
     }
@@ -44,6 +60,7 @@
     }
     button.add:hover { background: #1d4ed8; }
     .error { color: #b91c1c; font-size: 14px; margin: 8px 0 0; min-height: 18px; }
+    .error.ok { color: #166534; }
 
     /* Habit rows */
     .habit-top { display: flex; align-items: center; gap: 12px; }
@@ -79,49 +96,83 @@
     <p class="date" style="margin-bottom:2px">Your habit tracker for growth</p>
     <p class="date" id="today-label"></p>
 
-    <div class="card">
-      <div class="progress-text">
-        <span>Today's progress</span>
-        <span id="progress-text">0 of 0 done</span>
+    <!-- VIEW 1: shown when you are logged OUT -->
+    <div id="auth-view" hidden>
+      <div class="card">
+        <h2>Log in or create an account</h2>
+        <input type="email" id="email" class="field" placeholder="Email" autocomplete="email">
+        <input type="password" id="password" class="field" placeholder="Password (8 or more characters)" autocomplete="current-password">
+        <div class="auth-buttons">
+          <button type="button" id="login-btn" class="add">Log in</button>
+          <button type="button" id="signup-btn" class="secondary">Sign up</button>
+        </div>
+        <p class="error" id="auth-msg"></p>
       </div>
-      <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
     </div>
 
-    <div class="card">
-      <div class="add-row">
-        <input type="text" id="habit-input" placeholder="New habit, e.g. Read 10 pages" maxlength="60" autocomplete="off">
-        <button type="button" id="add-btn" class="add">Add</button>
+    <!-- VIEW 2: shown when you are logged IN -->
+    <div id="app-view" hidden>
+      <div class="topbar">
+        <span class="who" id="who"></span>
+        <button type="button" id="logout-btn" class="secondary">Log out</button>
       </div>
-      <p class="error" id="error"></p>
+
+      <div class="card">
+        <div class="progress-text">
+          <span>Today's progress</span>
+          <span id="progress-text">0 of 0 done</span>
+        </div>
+        <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+      </div>
+
+      <div class="card">
+        <div class="add-row">
+          <input type="text" id="habit-input" placeholder="New habit, e.g. Read 10 pages" maxlength="60" autocomplete="off">
+          <button type="button" id="add-btn" class="add">Add</button>
+        </div>
+        <p class="error" id="error"></p>
+      </div>
+
+      <div id="habit-list"></div>
+
+      <p class="note">Saved to your account. Only you can see your habits.</p>
     </div>
-
-    <div id="habit-list"></div>
-
-    <p class="note">Saved in this browser only.</p>
   </div>
+
+  <!-- The Supabase library (does the talking to the database and login) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 
   <script>
     // ===== BEHAVIOUR: what the page does =====
 
-    // --- 1. DATA ---
-    // Each habit looks like: { id: 123, name: "Read", doneDates: ["2026-11-23", "2026-11-24"] }
-    // A "date key" is text like "2026-11-24". We store only the days a habit was done.
-    const STORAGE_KEY = "habits-v1";
-    let habits = loadHabits();
+    // --- 0. CONNECTION SETTINGS ---
+    // The URL and the PUBLISHABLE key are safe to be public. The safety rules in the
+    // database (Row Level Security) are what protect the data.
+    // NEVER put a "secret" or "service_role" key in this file.
+    const SUPABASE_URL = "https://weonjwkebqpyraweckko.supabase.co";
+    const SUPABASE_KEY = "sb_publishable_MFi7LFunvnl3wGUwDJwzNw_UrSu3CMR";
+    const SITE_URL = "https://wayneliberty33-dotcom.github.io/Marvin/";
 
-    function loadHabits() {
-      try {
-        const saved = localStorage.getItem(STORAGE_KEY);
-        return saved ? JSON.parse(saved) : [];
-      } catch (e) {
-        return []; // storage blocked or broken: start empty instead of crashing
-      }
+    const $ = id => document.getElementById(id);
+
+    // If the Supabase library didn't load (no internet, blocked), say so clearly.
+    if (!window.supabase) {
+      $("auth-view").hidden = false;
+      const m = $("auth-msg");
+      m.textContent = "Could not load the login system. Check your internet and use Chrome.";
     }
+    const sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
-    function saveHabits() {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(habits));
-      } catch (e) { /* if saving fails, the app still works until you refresh */ }
+    // --- 1. STATE (what the page currently remembers) ---
+    // Each habit looks like: { id: "uuid", name: "Read", doneDates: ["2026-11-23", ...] }
+    let habits = [];
+    let loaded = false;        // true once habits have come back from the database
+    let currentUserId = null;  // who is logged in
+    let pending = new Set();   // habits with a save in progress (stops double clicks)
+
+    function setMsg(el, text, kind) {
+      el.textContent = text || "";
+      el.className = "error" + (kind === "ok" ? " ok" : "");
     }
 
     // --- 2. DATES ---
@@ -132,89 +183,176 @@
       const d = String(date.getDate()).padStart(2, "0");
       return y + "-" + m + "-" + d;
     }
-
     function daysAgo(n) {
       const d = new Date();
       d.setDate(d.getDate() - n);
       return d;
     }
 
-    // --- 3. STREAK LOGIC ---
-    // Current streak = days in a row ending today.
-    // If you haven't ticked today yet, we count from yesterday, so your
-    // streak is not "lost" until the day actually ends.
+    // --- 3. STREAK LOGIC (unchanged) ---
     function currentStreak(habit) {
       const done = new Set(habit.doneDates);
       let offset = done.has(dateKey(daysAgo(0))) ? 0 : 1;
       let count = 0;
-      while (done.has(dateKey(daysAgo(offset)))) {
-        count++;
-        offset++;
-      }
+      while (done.has(dateKey(daysAgo(offset)))) { count++; offset++; }
       return count;
     }
-
-    // Best streak = the longest run of consecutive days ever.
     function bestStreak(habit) {
       const sorted = [...habit.doneDates].sort();
       let best = 0, run = 0, prev = null;
       for (const key of sorted) {
-        if (prev && isNextDay(prev, key)) run++;
-        else run = 1;
+        if (prev && isNextDay(prev, key)) run++; else run = 1;
         if (run > best) best = run;
         prev = key;
       }
       return best;
     }
-
     function isNextDay(a, b) {
       const [y, m, d] = a.split("-").map(Number);
-      const next = new Date(y, m - 1, d + 1);
-      return dateKey(next) === b;
+      return dateKey(new Date(y, m - 1, d + 1)) === b;
     }
 
-    // --- 4. ACTIONS ---
-    function addHabit(name) {
-      habits.push({ id: Date.now(), name: name, doneDates: [] });
-      saveHabits();
-      render();
+    // --- 4. LOGIN / SIGN UP / LOG OUT ---
+    // We never see or store passwords. Supabase handles them.
+    async function handleLogin() {
+      const msg = $("auth-msg");
+      const email = $("email").value.trim();
+      const password = $("password").value;
+      if (!email || !password) { setMsg(msg, "Enter your email and password."); return; }
+      setBusy(true);
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      setBusy(false);
+      if (error) setMsg(msg, error.message);
+      else setMsg(msg, "");
     }
 
-    function toggleToday(id) {
-      const habit = habits.find(h => h.id === id);
-      const today = dateKey(new Date());
-      if (habit.doneDates.includes(today)) {
-        habit.doneDates = habit.doneDates.filter(d => d !== today);
-      } else {
-        habit.doneDates.push(today);
+    async function handleSignup() {
+      const msg = $("auth-msg");
+      const email = $("email").value.trim();
+      const password = $("password").value;
+      if (!email || !password) { setMsg(msg, "Enter an email and a password."); return; }
+      if (password.length < 8) { setMsg(msg, "Use a password of 8 or more characters."); return; }
+      setBusy(true);
+      const { data, error } = await sb.auth.signUp({
+        email, password, options: { emailRedirectTo: SITE_URL }
+      });
+      setBusy(false);
+      if (error) { setMsg(msg, error.message); return; }
+      if (!data.session) {
+        // Email confirmation is on: the account exists but must be confirmed first.
+        setMsg(msg, "Almost done. Check your email and click the confirmation link, then log in here.", "ok");
       }
-      saveHabits();
+    }
+
+    async function handleLogout() {
+      await sb.auth.signOut();
+    }
+
+    function setBusy(busy) {
+      $("login-btn").disabled = busy;
+      $("signup-btn").disabled = busy;
+    }
+
+    // --- 5. DATABASE ACTIONS ---
+    // The database rules make sure these only ever touch YOUR rows.
+    async function loadData() {
+      const who = currentUserId;
+      const err = $("error");
+      setMsg(err, "");
+      const h = await sb.from("habits").select("id,name").order("created_at", { ascending: true });
+      if (who !== currentUserId) return; // logged out or switched while loading
+      if (h.error) { setMsg(err, "Could not load habits: " + h.error.message); loaded = true; render(); return; }
+
+      // Fetch ticks in pages of 1000 (the database returns at most 1000 rows per request)
+      const checks = [];
+      const size = 1000;
+      let from = 0;
+      while (true) {
+        const r = await sb.from("check_ins").select("habit_id,done_on")
+          .order("done_on", { ascending: false }).order("id").range(from, from + size - 1);
+        if (who !== currentUserId) return;
+        if (r.error) { setMsg(err, "Could not load your history: " + r.error.message); break; }
+        checks.push(...r.data);
+        if (r.data.length < size) break;
+        from += size;
+      }
+
+      habits = h.data.map(x => ({ id: x.id, name: x.name, doneDates: [] }));
+      const byId = new Map(habits.map(x => [x.id, x]));
+      for (const c of checks) {
+        const hb = byId.get(c.habit_id);
+        if (hb) hb.doneDates.push(c.done_on);
+      }
+      loaded = true;
       render();
     }
 
-    function deleteHabit(id) {
+    async function addHabit(name) {
+      const err = $("error");
+      const { data, error } = await sb.from("habits").insert({ name }).select("id,name").single();
+      if (error) {
+        // 23505 = "already exists" (you can't have the same habit twice)
+        setMsg(err, error.code === "23505" ? "You already have that habit." : "Could not add: " + error.message);
+        return false;
+      }
+      habits.push({ id: data.id, name: data.name, doneDates: [] });
+      render();
+      return true;
+    }
+
+    async function toggleToday(id) {
+      if (pending.has(id)) return;
       const habit = habits.find(h => h.id === id);
-      if (!confirm('Delete "' + habit.name + '" and all its history?')) return;
-      habits = habits.filter(h => h.id !== id);
-      saveHabits();
+      if (!habit) return;
+      const err = $("error");
+      const today = dateKey(new Date());
+      const wasDone = habit.doneDates.includes(today);
+      pending.add(id);
+      setMsg(err, "");
+
+      let error = null;
+      if (wasDone) {
+        ({ error } = await sb.from("check_ins").delete().eq("habit_id", id).eq("done_on", today));
+      } else {
+        ({ error } = await sb.from("check_ins").insert({ habit_id: id, done_on: today }));
+        if (error && error.code === "23505") error = null; // already ticked (e.g. on another device)
+      }
+      pending.delete(id);
+
+      if (error) { setMsg(err, "Could not save: " + error.message); render(); return; }
+      if (wasDone) habit.doneDates = habit.doneDates.filter(d => d !== today);
+      else if (!habit.doneDates.includes(today)) habit.doneDates.push(today);
       render();
     }
 
-    // --- 5. DRAWING THE PAGE ---
-    // render() rebuilds the list from the data every time something changes.
+    async function deleteHabit(id) {
+      const habit = habits.find(h => h.id === id);
+      if (!habit) return;
+      if (!confirm('Delete "' + habit.name + '" and all its history?')) return;
+      const { error } = await sb.from("habits").delete().eq("id", id);
+      if (error) { setMsg($("error"), "Could not delete: " + error.message); return; }
+      habits = habits.filter(h => h.id !== id);
+      render();
+    }
+
+    // --- 6. DRAWING THE PAGE ---
     // We use textContent (not innerHTML) for habit names so typed text can never run as code.
     function render() {
       const today = dateKey(new Date());
-      const list = document.getElementById("habit-list");
+      const list = $("habit-list");
       list.innerHTML = "";
 
-      // Progress card
       const doneCount = habits.filter(h => h.doneDates.includes(today)).length;
-      document.getElementById("progress-text").textContent =
-        doneCount + " of " + habits.length + " done";
-      document.getElementById("bar-fill").style.width =
-        habits.length ? (doneCount / habits.length * 100) + "%" : "0%";
+      $("progress-text").textContent = doneCount + " of " + habits.length + " done";
+      $("bar-fill").style.width = habits.length ? (doneCount / habits.length * 100) + "%" : "0%";
 
+      if (!loaded) {
+        const wait = document.createElement("div");
+        wait.className = "card empty";
+        wait.textContent = "Loading your habits...";
+        list.appendChild(wait);
+        return;
+      }
       if (habits.length === 0) {
         const empty = document.createElement("div");
         empty.className = "card empty";
@@ -229,7 +367,6 @@
         const card = document.createElement("div");
         card.className = "card habit" + (isDone ? " done" : "");
 
-        // Top row: checkbox, name, delete
         const top = document.createElement("div");
         top.className = "habit-top";
 
@@ -237,7 +374,7 @@
         box.type = "checkbox";
         box.checked = isDone;
         box.setAttribute("aria-label", "Mark " + habit.name + " done for today");
-        // "click" instead of "change": some browsers (like Opera Mini) don't fire "change" reliably
+        // "click" instead of "change": more reliable in some browsers
         box.addEventListener("click", () => toggleToday(habit.id));
 
         const name = document.createElement("span");
@@ -245,13 +382,13 @@
         name.textContent = habit.name;
 
         const del = document.createElement("button");
+        del.type = "button";
         del.className = "delete";
         del.textContent = "Delete";
         del.addEventListener("click", () => deleteHabit(habit.id));
 
         top.append(box, name, del);
 
-        // Stats row
         const stats = document.createElement("div");
         stats.className = "stats";
         const streak = currentStreak(habit);
@@ -263,7 +400,6 @@
         stats.querySelector("[data-b]").textContent = bestStreak(habit);
         stats.querySelector("[data-t]").textContent = habit.doneDates.length;
 
-        // Last 7 days strip (oldest on the left, today on the right)
         const week = document.createElement("div");
         week.className = "week";
         for (let i = 6; i >= 0; i--) {
@@ -285,33 +421,65 @@
       }
     }
 
-    // --- 6. WIRING THE ADD FORM ---
-    // We do NOT use a <form> here. Some preview windows block form submission,
-    // which made the Add button do nothing. A plain button click always works.
-    function handleAdd() {
-      const input = document.getElementById("habit-input");
-      const error = document.getElementById("error");
+    // --- 7. ADD BUTTON (plain button, no <form>, so it works in previews too) ---
+    let adding = false;
+    async function handleAdd() {
+      if (adding) return;
+      const input = $("habit-input");
+      const err = $("error");
       const name = input.value.trim();
-
-      if (name === "") { error.textContent = "Type a habit first."; return; }
+      if (name === "") { setMsg(err, "Type a habit first."); return; }
       if (habits.some(h => h.name.toLowerCase() === name.toLowerCase())) {
-        error.textContent = "You already have that habit."; return;
+        setMsg(err, "You already have that habit."); return;
       }
-      error.textContent = "";
-      addHabit(name);
-      input.value = "";
-      input.focus();
+      setMsg(err, "");
+      adding = true;
+      const ok = await addHabit(name);
+      adding = false;
+      if (ok) { input.value = ""; input.focus(); }
     }
 
-    document.getElementById("add-btn").addEventListener("click", handleAdd);
-    document.getElementById("habit-input").addEventListener("keydown", function (event) {
-      if (event.key === "Enter") handleAdd(); // pressing Enter also adds
-    });
+    // --- 8. SWITCHING BETWEEN LOGGED-OUT AND LOGGED-IN ---
+    function onSession(session) {
+      if (session && session.user) {
+        if (currentUserId === session.user.id) return; // already showing this user
+        currentUserId = session.user.id;
+        habits = []; loaded = false;
+        $("who").textContent = session.user.email || "";
+        $("auth-view").hidden = true;
+        $("app-view").hidden = false;
+        $("password").value = "";
+        render();
+        loadData();
+      } else {
+        currentUserId = null;
+        habits = []; loaded = false;
+        $("app-view").hidden = true;
+        $("auth-view").hidden = false;
+        $("habit-list").innerHTML = "";
+      }
+    }
 
-    // --- 7. START ---
-    document.getElementById("today-label").textContent =
+    // --- 9. START ---
+    $("today-label").textContent =
       new Date().toLocaleDateString("en", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-    render();
+
+    $("login-btn").addEventListener("click", handleLogin);
+    $("signup-btn").addEventListener("click", handleSignup);
+    $("logout-btn").addEventListener("click", handleLogout);
+    $("add-btn").addEventListener("click", handleAdd);
+    $("habit-input").addEventListener("keydown", e => { if (e.key === "Enter") handleAdd(); });
+    $("password").addEventListener("keydown", e => { if (e.key === "Enter") handleLogin(); });
+
+    if (sb) {
+      // Supabase tells us when you log in, log out, or when the page opens with a saved login.
+      // setTimeout avoids a known problem of calling the database inside this callback.
+      sb.auth.onAuthStateChange((event, session) => {
+        if (event === "INITIAL_SESSION" || event === "SIGNED_IN" || event === "SIGNED_OUT") {
+          setTimeout(() => onSession(session), 0);
+        }
+      });
+    }
   </script>
 </body>
 </html>
