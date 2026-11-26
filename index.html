@@ -48,6 +48,18 @@
     }
     .hint { font-size: 14px; color: #4b5563; margin: 6px 0 12px; }
 
+    /* Reminder banner ("2 habits left today") */
+    .banner {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      background: #fff7ed; border: 1px solid #fdba74; color: #9a3412;
+      border-radius: 12px; padding: 14px 16px; margin-bottom: 16px;
+    }
+    .banner.done { background: #f0fdf4; border-color: #86efac; color: #166534; }
+    .banner strong { display: block; font-size: 17px; }
+    .banner span { font-size: 14px; }
+    .banner button { white-space: nowrap; }
+    .habit.flash { outline: 3px solid #f59e0b; outline-offset: 2px; }
+
     /* Today's progress */
     .progress-text { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 8px; }
     .bar { height: 10px; background: #e5e7eb; border-radius: 99px; overflow: hidden; }
@@ -135,6 +147,15 @@
       <div class="topbar">
         <span class="who" id="who"></span>
         <button type="button" id="logout-btn" class="secondary">Log out</button>
+      </div>
+
+      <!-- Reminder banner: tells you how many habits are left to tick today -->
+      <div class="banner" id="banner" role="status" aria-live="polite" hidden>
+        <div>
+          <strong id="banner-title"></strong>
+          <span id="banner-sub"></span>
+        </div>
+        <button type="button" id="banner-btn" class="add">Tick now</button>
       </div>
 
       <div class="card">
@@ -529,7 +550,72 @@
 
     // --- 6. DRAWING THE PAGE ---
     // We use textContent (not innerHTML) for habit names so typed text can never run as code.
+    // --- 6a. THE REMINDER BANNER ---
+    // Shows how many habits you have NOT ticked today. It is worked out fresh every time
+    // the page is drawn, so it is always up to date. It also puts the number in the
+    // browser tab title, e.g. "(2) Marvin - Habit Tracker".
+    const BASE_TITLE = "Marvin - Habit Tracker";
+
+    function updateBanner() {
+      const banner = $("banner");
+      if (!currentUserId || !loaded || habits.length === 0) {
+        banner.hidden = true;
+        document.title = BASE_TITLE;
+        return;
+      }
+      const today = dateKey(new Date());
+      const left = habits.filter(h => !h.doneDates.includes(today));
+      banner.hidden = false;
+
+      if (left.length === 0) {
+        banner.className = "banner done";
+        $("banner-title").textContent = "All done for today. Great work!";
+        $("banner-sub").textContent = "Come back tomorrow to keep your streaks going.";
+        $("banner-btn").hidden = true;
+        document.title = BASE_TITLE;
+        return;
+      }
+
+      banner.className = "banner";
+      $("banner-title").textContent = left.length + (left.length === 1 ? " habit" : " habits") + " left today";
+      // If ticking would save a running streak, say so (use the longest one at risk).
+      let risk = null;
+      for (const h of left) {
+        const s = currentStreak(h);
+        if (s > 0 && (!risk || s > risk.streak)) risk = { streak: s, name: h.name };
+      }
+      $("banner-sub").textContent = risk
+        ? "Don't lose your " + risk.streak + "-day streak on \"" + risk.name + "\"."
+        : "A quick tick keeps you on track.";
+      $("banner-btn").hidden = false;
+      document.title = "(" + left.length + ") " + BASE_TITLE;
+    }
+
+    // "Tick now": scrolls to the first habit you haven't done and highlights it briefly.
+    function handleBannerBtn() {
+      const card = document.querySelector("#habit-list .habit:not(.done)");
+      if (!card) return;
+      try { card.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) { card.scrollIntoView(); }
+      card.classList.add("flash");
+      setTimeout(() => card.classList.remove("flash"), 1800);
+    }
+
+    // If the page stays open past midnight, a new day has started: redraw so "today" is right.
+    let shownDay = dateKey(new Date());
+    function setTodayLabel() {
+      $("today-label").textContent =
+        new Date().toLocaleDateString("en", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+    }
+    function checkNewDay() {
+      const nowDay = dateKey(new Date());
+      if (nowDay === shownDay) return;
+      shownDay = nowDay;
+      setTodayLabel();
+      if (currentUserId) render();
+    }
+
     function render() {
+      updateBanner();
       const today = dateKey(new Date());
       const list = $("habit-list");
       list.innerHTML = "";
@@ -661,17 +747,23 @@
         habits = []; loaded = false;
         showView("auth");
         $("import-card").hidden = true;
+        $("banner").hidden = true;
+        document.title = BASE_TITLE;
         $("habit-list").innerHTML = "";
       }
     }
 
     // --- 9. START ---
-    $("today-label").textContent =
-      new Date().toLocaleDateString("en", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+    setTodayLabel();
+    // Check for a new day every minute, and whenever you come back to this tab.
+    setInterval(checkNewDay, 60000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) checkNewDay(); });
+    window.addEventListener("focus", checkNewDay);
 
     $("login-btn").addEventListener("click", handleLogin);
     $("signup-btn").addEventListener("click", handleSignup);
     $("logout-btn").addEventListener("click", handleLogout);
+    $("banner-btn").addEventListener("click", handleBannerBtn);
     $("forgot-btn").addEventListener("click", handleForgot);
     $("save-pw-btn").addEventListener("click", handleSaveNewPassword);
     $("cancel-reset-btn").addEventListener("click", handleCancelReset);

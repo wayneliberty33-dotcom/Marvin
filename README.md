@@ -9,6 +9,8 @@ Live site: https://wayneliberty33-dotcom.github.io/Marvin/
 - Add a habit, tick it done for today, delete it
 - See your current streak (days in a row), best streak and total days
 - See the last 7 days at a glance
+- A reminder banner shows how many habits are left to tick today (for example "1 habit left today"),
+  warns you when a streak is at risk, and turns green when everything is done
 - Your habits are saved to your account, so they appear on any device
 - Each person can only see their own habits
 
