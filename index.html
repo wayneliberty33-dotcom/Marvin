@@ -42,6 +42,11 @@
     button:disabled { opacity: .6; cursor: not-allowed; }
     .topbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 16px; }
     .who { font-size: 13px; color: #6b7280; word-break: break-all; }
+    button.linkbtn {
+      background: none; border: 0; padding: 8px 0 0; font-size: 14px;
+      color: #2563eb; cursor: pointer; text-decoration: underline;
+    }
+    .hint { font-size: 14px; color: #4b5563; margin: 6px 0 12px; }
 
     /* Today's progress */
     .progress-text { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 8px; }
@@ -106,7 +111,22 @@
           <button type="button" id="login-btn" class="add">Log in</button>
           <button type="button" id="signup-btn" class="secondary">Sign up</button>
         </div>
+        <button type="button" id="forgot-btn" class="linkbtn">Forgot password?</button>
         <p class="error" id="auth-msg"></p>
+      </div>
+    </div>
+
+    <!-- VIEW 3: shown after you click the link in a "reset password" email -->
+    <div id="reset-view" hidden>
+      <div class="card">
+        <h2>Choose a new password</h2>
+        <input type="password" id="new-password" class="field" placeholder="New password (8 or more characters)" autocomplete="new-password">
+        <input type="password" id="new-password2" class="field" placeholder="Type it again" autocomplete="new-password">
+        <div class="auth-buttons">
+          <button type="button" id="save-pw-btn" class="add">Save password</button>
+          <button type="button" id="cancel-reset-btn" class="secondary">Cancel</button>
+        </div>
+        <p class="error" id="reset-msg"></p>
       </div>
     </div>
 
@@ -133,6 +153,17 @@
         <p class="error" id="error"></p>
       </div>
 
+      <!-- Shown only if habits from the old browser-only version are found on this device -->
+      <div class="card" id="import-card" hidden>
+        <strong>Found habits saved on this device from before</strong>
+        <p class="hint" id="import-info"></p>
+        <div class="auth-buttons">
+          <button type="button" id="import-btn" class="add">Import them</button>
+          <button type="button" id="import-skip-btn" class="secondary">No thanks</button>
+        </div>
+        <p class="error" id="import-msg"></p>
+      </div>
+
       <div id="habit-list"></div>
 
       <p class="note">Saved to your account. Only you can see your habits.</p>
@@ -154,6 +185,12 @@
     const SITE_URL = "https://wayneliberty33-dotcom.github.io/Marvin/";
 
     const $ = id => document.getElementById(id);
+
+    // When you click the link in a "reset password" email, it brings you back here with
+    // "type=recovery" in the address. We read that BEFORE anything else so we show the
+    // "choose a new password" screen instead of logging you straight in.
+    const startHash = window.location.hash || "";
+    let recovering = /type=recovery/.test(startHash);
 
     // If the Supabase library didn't load (no internet, blocked), say so clearly.
     if (!window.supabase) {
@@ -248,6 +285,63 @@
       await sb.auth.signOut();
     }
 
+    // --- 4b. FORGOT PASSWORD ---
+    // Step 1: you type your email and click "Forgot password?". Supabase emails you a link.
+    // We always show the same message, so nobody can use this to find out who has an account.
+    async function handleForgot() {
+      const msg = $("auth-msg");
+      const email = $("email").value.trim();
+      if (!email) { setMsg(msg, "Type your email above first, then click Forgot password."); return; }
+      setBusy(true);
+      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: SITE_URL });
+      setBusy(false);
+      if (error) setMsg(msg, error.message);
+      else setMsg(msg, "If that email has an account, we sent a reset link. Check your inbox and spam folder.", "ok");
+    }
+
+    // Step 2: you click the link in the email, land here, and choose a new password.
+    async function handleSaveNewPassword() {
+      const msg = $("reset-msg");
+      const p1 = $("new-password").value;
+      const p2 = $("new-password2").value;
+      if (p1.length < 8) { setMsg(msg, "Use a password of 8 or more characters."); return; }
+      if (p1 !== p2) { setMsg(msg, "The two passwords don't match."); return; }
+      $("save-pw-btn").disabled = true;
+      const { error } = await sb.auth.updateUser({ password: p1 });
+      $("save-pw-btn").disabled = false;
+      if (error) { setMsg(msg, error.message); return; }
+      $("new-password").value = "";
+      $("new-password2").value = "";
+      setMsg(msg, "");
+      recovering = false;
+      cleanAddressBar();
+      const { data } = await sb.auth.getSession();
+      currentUserId = null; // make sure the app view is drawn fresh
+      onSession(data.session);
+    }
+
+    async function handleCancelReset() {
+      recovering = false;
+      cleanAddressBar();
+      await sb.auth.signOut(); // goes back to the login box
+    }
+
+    // Removes the long token from the address bar so it isn't left lying around.
+    function cleanAddressBar() {
+      try { history.replaceState(null, "", window.location.pathname + window.location.search); } catch (e) { /* ignore */ }
+    }
+
+    // If an email link was expired or already used, Supabase puts an error in the address.
+    function showLinkProblem() {
+      if (!/error_description=|error_code=/.test(startHash)) return;
+      const params = new URLSearchParams(startHash.replace(/^#/, ""));
+      const expired = params.get("error_code") === "otp_expired";
+      setMsg($("auth-msg"), expired
+        ? "That email link has expired or was already used. Type your email and click Forgot password to get a new one."
+        : "That email link did not work. Please try again.");
+      cleanAddressBar();
+    }
+
     function setBusy(busy) {
       $("login-btn").disabled = busy;
       $("signup-btn").disabled = busy;
@@ -285,6 +379,104 @@
       }
       loaded = true;
       render();
+      maybeOfferImport();
+    }
+
+    // --- 5b. ONE-TIME IMPORT OF OLD HABITS ---
+    // Before logins existed, habits were saved in this browser under the name "habits-v1".
+    // If we find some, we offer to copy them into your account. Nothing is deleted from the
+    // browser, and importing twice never creates duplicates.
+    const OLD_KEY = "habits-v1";
+
+    function importFlagKey() { return "marvin-import-done-" + currentUserId; }
+    function importAlreadyHandled() {
+      try { return localStorage.getItem(importFlagKey()) === "1"; } catch (e) { return false; }
+    }
+    function markImportHandled() {
+      try { localStorage.setItem(importFlagKey(), "1"); } catch (e) { /* ignore */ }
+    }
+
+    function isRealDate(s) {
+      if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+      const [y, m, d] = s.split("-").map(Number);
+      return dateKey(new Date(y, m - 1, d)) === s; // rejects things like 2026-02-31
+    }
+
+    // Reads the old habits and keeps only the clean ones (so bad data can't break the import).
+    function readOldHabits() {
+      try {
+        const raw = localStorage.getItem(OLD_KEY);
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return [];
+        const out = [];
+        const seen = new Set();
+        for (const h of arr) {
+          if (!h || typeof h.name !== "string") continue;
+          const name = h.name.trim().slice(0, 60);
+          if (!name || seen.has(name.toLowerCase())) continue;
+          seen.add(name.toLowerCase());
+          const dates = Array.isArray(h.doneDates)
+            ? [...new Set(h.doneDates.filter(isRealDate))] : [];
+          out.push({ name, dates });
+        }
+        return out;
+      } catch (e) { return []; }
+    }
+
+    function maybeOfferImport() {
+      const card = $("import-card");
+      if (importAlreadyHandled()) { card.hidden = true; return; }
+      const old = readOldHabits();
+      if (old.length === 0) { card.hidden = true; return; }
+      const days = old.reduce((n, o) => n + o.dates.length, 0);
+      $("import-info").textContent =
+        old.length + (old.length === 1 ? " habit" : " habits") + " and " + days +
+        (days === 1 ? " day" : " days") + " of history can be copied into your account.";
+      setMsg($("import-msg"), "");
+      $("import-btn").disabled = false;
+      card.hidden = false;
+    }
+
+    async function doImport() {
+      const msg = $("import-msg");
+      const old = readOldHabits();
+      if (old.length === 0) return;
+      const who = currentUserId;
+      $("import-btn").disabled = true;
+      setMsg(msg, "Importing...");
+
+      // 1) Create the habits you don't already have (matching names are reused, not duplicated)
+      const have = new Map(habits.map(h => [h.name.toLowerCase(), h.id]));
+      const toCreate = old.filter(o => !have.has(o.name.toLowerCase())).map(o => ({ name: o.name }));
+      if (toCreate.length) {
+        const r = await sb.from("habits").insert(toCreate).select("id,name");
+        if (who !== currentUserId) return;
+        if (r.error) { setMsg(msg, "Import stopped: " + r.error.message + ". You can click Import again."); $("import-btn").disabled = false; return; }
+        for (const row of r.data) have.set(row.name.toLowerCase(), row.id);
+      }
+
+      // 2) Copy the days, in chunks of 500. "ignore duplicates" makes it safe to run again.
+      const rows = [];
+      for (const o of old) {
+        const id = have.get(o.name.toLowerCase());
+        for (const d of o.dates) rows.push({ habit_id: id, done_on: d });
+      }
+      for (let i = 0; i < rows.length; i += 500) {
+        const r = await sb.from("check_ins")
+          .upsert(rows.slice(i, i + 500), { onConflict: "habit_id,done_on", ignoreDuplicates: true });
+        if (who !== currentUserId) return;
+        if (r.error) { setMsg(msg, "Import stopped: " + r.error.message + ". You can click Import again; nothing will be duplicated."); $("import-btn").disabled = false; return; }
+      }
+
+      markImportHandled();
+      $("import-card").hidden = true;
+      await loadData();
+    }
+
+    function skipImport() {
+      markImportHandled();
+      $("import-card").hidden = true;
     }
 
     async function addHabit(name) {
@@ -440,22 +632,35 @@
     }
 
     // --- 8. SWITCHING BETWEEN LOGGED-OUT AND LOGGED-IN ---
+    function showView(name) {
+      $("auth-view").hidden = name !== "auth";
+      $("app-view").hidden = name !== "app";
+      $("reset-view").hidden = name !== "reset";
+    }
+
     function onSession(session) {
+      if (recovering && session && session.user) {
+        // You arrived from a reset-password email: ask for a new password first.
+        currentUserId = null;
+        habits = []; loaded = false;
+        showView("reset");
+        return;
+      }
       if (session && session.user) {
         if (currentUserId === session.user.id) return; // already showing this user
         currentUserId = session.user.id;
         habits = []; loaded = false;
         $("who").textContent = session.user.email || "";
-        $("auth-view").hidden = true;
-        $("app-view").hidden = false;
+        showView("app");
         $("password").value = "";
+        $("import-card").hidden = true;
         render();
         loadData();
       } else {
         currentUserId = null;
         habits = []; loaded = false;
-        $("app-view").hidden = true;
-        $("auth-view").hidden = false;
+        showView("auth");
+        $("import-card").hidden = true;
         $("habit-list").innerHTML = "";
       }
     }
@@ -467,6 +672,13 @@
     $("login-btn").addEventListener("click", handleLogin);
     $("signup-btn").addEventListener("click", handleSignup);
     $("logout-btn").addEventListener("click", handleLogout);
+    $("forgot-btn").addEventListener("click", handleForgot);
+    $("save-pw-btn").addEventListener("click", handleSaveNewPassword);
+    $("cancel-reset-btn").addEventListener("click", handleCancelReset);
+    $("new-password2").addEventListener("keydown", e => { if (e.key === "Enter") handleSaveNewPassword(); });
+    $("import-btn").addEventListener("click", doImport);
+    $("import-skip-btn").addEventListener("click", skipImport);
+    showLinkProblem();
     $("add-btn").addEventListener("click", handleAdd);
     $("habit-input").addEventListener("keydown", e => { if (e.key === "Enter") handleAdd(); });
     $("password").addEventListener("keydown", e => { if (e.key === "Enter") handleLogin(); });
@@ -475,7 +687,8 @@
       // Supabase tells us when you log in, log out, or when the page opens with a saved login.
       // setTimeout avoids a known problem of calling the database inside this callback.
       sb.auth.onAuthStateChange((event, session) => {
-        if (event === "INITIAL_SESSION" || event === "SIGNED_IN" || event === "SIGNED_OUT") {
+        if (event === "PASSWORD_RECOVERY") recovering = true;
+        if (event === "INITIAL_SESSION" || event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "PASSWORD_RECOVERY") {
           setTimeout(() => onSession(session), 0);
         }
       });
